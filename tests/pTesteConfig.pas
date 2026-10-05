@@ -26,6 +26,7 @@ type
     [Test] procedure TestValidarSemBanco;
     [Test] procedure TestValidarNenhumaCopia;
     [Test] procedure TestValidarRetencaoMenorQueUm;
+    [Test] procedure TestValidarSemSenha;
   end;
 
 implementation
@@ -55,6 +56,24 @@ begin
     L.SaveToFile(Result);
   finally
     L.Free;
+  end;
+end;
+
+procedure TTesteConfig.TestValidarSemSenha;
+var
+  C: TConfig;
+  B: TBancoConfig;
+  Erro: string;
+begin
+  CriarFirebirdFalso;
+  C := TConfig.Create;
+  try
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := FPasta; C.Senha := '';
+    B.Nome := 'A'; B.Arquivo := TPath.Combine(FPasta, 'A.FDB'); C.Bancos.Add(B);
+    Assert.IsFalse(C.Validar(Erro));
+    Assert.Contains(Erro, 'Senha');
+  finally
+    C.Free;
   end;
 end;
 
@@ -153,7 +172,7 @@ begin
   CriarFirebirdFalso;
   C := TConfig.Create;
   try
-    C.FirebirdDir := FFb; C.Destino := TPath.Combine(FPasta, 'dest');
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := TPath.Combine(FPasta, 'dest');
     B.Nome := 'A'; B.Arquivo := TPath.Combine(FPasta, 'A.FDB'); C.Bancos.Add(B);
     Assert.IsTrue(C.Validar(Erro), Erro);
     Assert.IsTrue(TDirectory.Exists(C.Destino), 'Validar deve criar o destino');
@@ -171,7 +190,7 @@ begin
   CriarFirebirdFalso;
   C := TConfig.Create;
   try
-    C.FirebirdDir := FFb; C.Destino := FPasta; C.Horario := '2:0';
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := FPasta; C.Horario := '2:0';
     B.Nome := 'A'; B.Arquivo := TPath.Combine(FPasta, 'A.FDB'); C.Bancos.Add(B);
     Assert.IsFalse(C.Validar(Erro));
     Assert.Contains(Erro, 'Horario');
@@ -194,7 +213,7 @@ begin
   TFile.Delete(TPath.Combine(FFb, 'gbak.exe'));
   C := TConfig.Create;
   try
-    C.FirebirdDir := FFb; C.Destino := FPasta;
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := FPasta;
     B.Nome := 'A'; B.Arquivo := TPath.Combine(FPasta, 'A.FDB'); C.Bancos.Add(B);
     Assert.IsFalse(C.Validar(Erro));
     Assert.Contains(Erro, 'gbak.exe');
@@ -212,7 +231,7 @@ begin
   CriarFirebirdFalso;
   C := TConfig.Create;
   try
-    C.FirebirdDir := FFb; C.Destino := FPasta;
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := FPasta;
     B.Nome := 'A B'; B.Arquivo := TPath.Combine(FPasta, 'A.FDB'); C.Bancos.Add(B);
     Assert.IsFalse(C.Validar(Erro));
     Assert.Contains(Erro, 'Nome');
@@ -232,7 +251,7 @@ begin
   CriarFirebirdFalso;
   C := TConfig.Create;
   try
-    C.FirebirdDir := FFb; C.Destino := FPasta;
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := FPasta;
     Assert.IsFalse(C.Validar(Erro));
     Assert.Contains(Erro, 'banco');
   finally
@@ -249,7 +268,7 @@ begin
   CriarFirebirdFalso;
   C := TConfig.Create;
   try
-    C.FirebirdDir := FFb; C.Destino := FPasta; C.CopiaFbk := False; C.CopiaFdb := False;
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := FPasta; C.CopiaFbk := False; C.CopiaFdb := False;
     B.Nome := 'A'; B.Arquivo := TPath.Combine(FPasta, 'A.FDB'); C.Bancos.Add(B);
     Assert.IsFalse(C.Validar(Erro));
     Assert.Contains(Erro, 'cópia');
@@ -267,7 +286,7 @@ begin
   CriarFirebirdFalso;
   C := TConfig.Create;
   try
-    C.FirebirdDir := FFb; C.Destino := FPasta; C.RetencaoDias := 0;
+    C.FirebirdDir := FFb; C.Senha := 'x'; C.Destino := FPasta; C.RetencaoDias := 0;
     B.Nome := 'A'; B.Arquivo := TPath.Combine(FPasta, 'A.FDB'); C.Bancos.Add(B);
     Assert.IsFalse(C.Validar(Erro));
     Assert.Contains(Erro, 'RetencaoDias');

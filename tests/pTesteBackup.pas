@@ -19,6 +19,7 @@ type
     FAmbientes: TStringList;     // "ISC_USER;ISC_PASSWORD" por chamada
     FCodigos: TDictionary<string, Integer>; // prefixo de "exe|args" -> exit code (padrão 0)
     FLevantar: string;           // prefixo de "exe|args" que faz o executor falso levantar EProcesso
+    FMarcadorNoLock: Boolean;    // o marcador .lock-pendente existia quando o -L rodou?
     procedure CriarArquivo(const ANome: string; ADataModif: TDateTime; ATamanho: Integer = 0);
     procedure AddBanco(const ANome: string);
     function ExecutorFalso: TExecutor;
@@ -46,6 +47,8 @@ type
     [Test] procedure TestExecutarConcorrenteSaiComAviso;
     [Test] procedure TestStatusUsaHoraDeInicio;
     [Test] procedure TestExecutarComDestinoInvalidoNaoLevanta;
+    [Test] procedure TestMarcadorExisteDuranteLock;
+    [Test] procedure TestRetencaoUsaDataDoNomeNaoDoArquivo;
   end;
 
 implementation
@@ -90,6 +93,8 @@ begin
       FChamadas.Add(ExtractFileName(AExe) + '|' + AArgs);
       if (FLevantar <> '') and StartsText(FLevantar, ExtractFileName(AExe) + '|' + AArgs) then
         raise EProcesso.Create('falha simulada ao executar ' + ExtractFileName(AExe));
+      if SameText(ExtractFileName(AExe), 'nbackup.exe') and StartsText('-L ', AArgs) then
+        FMarcadorNoLock := TFile.Exists(TPath.Combine(FDestino, 'AG.lock-pendente'));
       if Assigned(AAmbiente) then
         FAmbientes.Add(AAmbiente.Values['ISC_USER'] + ';' + AAmbiente.Values['ISC_PASSWORD'])
       else
@@ -440,7 +445,7 @@ begin
   // data real: o arquivo criado pelo executor falso recebe LastWriteTime de agora,
   // e uma data fictícia no futuro faria a retenção apagá-lo
   Hoje := Trunc(Date) + EncodeTime(2, 0, 0, 0);
-  CriarArquivo('AG_2026-10-01_0200.fbk', Hoje - 19);
+  CriarArquivo(ExtractFileName(TBackup.NomeArquivoBackup(FDestino, 'AG', Hoje - 19, '.fbk')), Hoje - 19);
   FCodigos.Add('gbak.exe|-b -g -v -se localhost:service_mgr "' + FConfig.Bancos[1].Arquivo, 1);
   Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
   try
@@ -451,7 +456,7 @@ begin
     Bk.Free;
   end;
   Assert.AreEqual(2, FChamadas.Count);
-  Assert.IsFalse(TFile.Exists(TPath.Combine(FDestino, 'AG_2026-10-01_0200.fbk')));
+  Assert.IsFalse(TFile.Exists(TBackup.NomeArquivoBackup(FDestino, 'AG', Hoje - 19, '.fbk')), 'fbk velho apagado');
   Assert.IsTrue(TFile.Exists(TBackup.NomeArquivoBackup(FDestino, 'AG', Hoje, '.fbk')), 'fbk de hoje mantido');
   Assert.AreEqual(Hoje, TBackup.LerUltimaExecucao(FDestino), 0.00001);
 end;
@@ -573,6 +578,53 @@ begin
   end;
   Assert.AreEqual(Inicio, TBackup.LerUltimaExecucao(FDestino), 0.00001,
     'UltimaExecucao deve ser a hora de início, senão o timer pula o dia seguinte');
+end;
+
+procedure TTesteBackup.TestMarcadorExisteDuranteLock;
+var
+  Bk: TBackup;
+begin
+  // Se o processo cair entre o -L e a gravação do marcador, ninguém destrava o banco:
+  // o marcador tem que existir ANTES do -L (e sumir se o -L falhar, já coberto).
+  AddBanco('AG');
+  FConfig.CopiaFbk := False;
+  Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
+  try
+    Bk.EspacoLivreFixo := High(Int64);
+    Assert.IsTrue(Bk.ExecutarBanco(FConfig.Bancos[0]).OK);
+  finally
+    Bk.Free;
+  end;
+  Assert.IsTrue(FMarcadorNoLock, 'marcador deve existir durante o nbackup -L');
+  Assert.IsFalse(TFile.Exists(TPath.Combine(FDestino, 'AG.lock-pendente')));
+end;
+
+procedure TTesteBackup.TestRetencaoUsaDataDoNomeNaoDoArquivo;
+var
+  Bk: TBackup;
+  Hoje: TDateTime;
+begin
+  // CopyFile preserva a data da origem e o -F pode falhar: a data confiável é a do nome.
+  AddBanco('AG');
+  FConfig.RetencaoDias := 7;
+  Hoje := EncodeDate(2026, 10, 20) + EncodeTime(2, 0, 0, 0);
+  CriarArquivo('AG_2026-10-01_0200.fbk', Hoje);          // nome velho, arquivo "novo": apaga
+  CriarArquivo('AG_2026-10-20_0200.fdb', Hoje - 30);     // nome de hoje, arquivo "velho": mantém
+  CriarArquivo('AG_2026-10-13_0159.fbk', Hoje);          // 1 min além do limite (13/10 02:00): apaga
+  CriarArquivo('AG_2026-10-13_0200.fdb', Hoje - 30);     // exatamente no limite: mantém
+  CriarArquivo('backup_2026-10-20.log', Hoje - 30);      // log de hoje: mantém
+  Bk := TBackup.Create(FConfig, FLog);
+  try
+    Bk.Agora := Hoje;
+    Bk.AplicarRetencao;
+  finally
+    Bk.Free;
+  end;
+  Assert.IsFalse(TFile.Exists(TPath.Combine(FDestino, 'AG_2026-10-01_0200.fbk')));
+  Assert.IsTrue(TFile.Exists(TPath.Combine(FDestino, 'AG_2026-10-20_0200.fdb')));
+  Assert.IsFalse(TFile.Exists(TPath.Combine(FDestino, 'AG_2026-10-13_0159.fbk')));
+  Assert.IsTrue(TFile.Exists(TPath.Combine(FDestino, 'AG_2026-10-13_0200.fdb')));
+  Assert.IsTrue(TFile.Exists(TPath.Combine(FDestino, 'backup_2026-10-20.log')));
 end;
 
 procedure TTesteBackup.TestExecutarComDestinoInvalidoNaoLevanta;

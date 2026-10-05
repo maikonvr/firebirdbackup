@@ -77,10 +77,16 @@ type
     procedure AoTerminar(AOk: Boolean);
     procedure Habilitar(AAtivo: Boolean);
     procedure LimitarMemo;
+  protected
+    procedure WndProc(var Message: TMessage); override;
   end;
 
 var
   FormPrincipal: TFormPrincipal;
+
+// Mensagem registrada que uma segunda instância envia para a janela existente se mostrar.
+// (ShowWindow de fora não atualiza Visible do form, e o Hide seguinte não funcionaria.)
+function MensagemAbrir: UINT;
 
 implementation
 
@@ -92,6 +98,24 @@ uses
 const
   MaxLinhasMemo = 5000;
   LinhasRemovidas = 1000;
+
+var
+  MsgAbrir: UINT = 0;
+
+function MensagemAbrir: UINT;
+begin
+  if MsgAbrir = 0 then
+    MsgAbrir := RegisterWindowMessage('FirebirdBackup_Abrir');
+  Result := MsgAbrir;
+end;
+
+procedure TFormPrincipal.WndProc(var Message: TMessage);
+begin
+  if (Message.Msg = MensagemAbrir) and (Message.Msg <> 0) then
+    miAbrirClick(nil)
+  else
+    inherited;
+end;
 
 procedure TFormPrincipal.FormCreate(Sender: TObject);
 begin
@@ -396,7 +420,11 @@ begin
           try
             Log.OnLinha := procedure(const L: string)
               begin
-                TThread.Queue(nil, procedure begin memoLog.Lines.Add(L); end);
+                TThread.Queue(nil, procedure
+                  begin
+                    memoLog.Lines.Add(L);
+                    LimitarMemo;
+                  end);
               end;
             Backup := TBackup.Create(Config, Log);
             try

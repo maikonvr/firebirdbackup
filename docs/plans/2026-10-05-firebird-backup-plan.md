@@ -34,7 +34,9 @@
 - Tempo limite por processo (padrão 6 h em `TBackup.TimeoutMs`) com polling do pipe e `TerminateProcess` (`TestTimeoutEncerraProcesso`); `schtasks` com 60 s.
 - `UltimaExecucao` passa a ser a hora de início do run, senão um backup que cruza a meia-noite faz o timer pular o dia seguinte (`TestStatusUsaHoraDeInicio`).
 
-**Pendências menores registradas (não corrigidas)**: marcador escrito só após o `-L` (janela mínima); retenção por `LastWriteTime` em vez da data do nome; segunda instância restaurada por `ShowWindow` externo pode deixar o `Hide` sem efeito; `LimitarMemo` só ao terminar; `Validar` não exige senha; README não cita que o destino precisa ser gravável pela conta do serviço Firebird e omite o `-v`; integração validada só no Firebird 3.0 (fazer um `--run` de teste no 2.5 real antes do primeiro uso). Restore fica fora (decisão do usuário); senha cifrada e teste de restore automático são evoluções futuras.
+**Pendências menores corrigidas a pedido do usuário (2026-10-05, suíte em 51 testes)**: marcador `.lock-pendente` escrito antes do `-L` e removido se o `-L` falhar (`TestMarcadorExisteDuranteLock`); retenção pela data embutida no nome do arquivo, não por `LastWriteTime` (`TestRetencaoUsaDataDoNomeNaoDoArquivo`); segunda instância avisa a janela existente por mensagem registrada e o form se mostra pelo VCL, mantendo o fechar-para-bandeja funcionando depois (verificado em execução); memo podado também durante o run; `Validar` exige senha (`TestValidarSemSenha`); README cita o `-v` e a permissão da conta do serviço Firebird no destino.
+
+**Pendência restante**: integração validada só no Firebird 3.0; fazer um `--run` de teste no 2.5 real antes do primeiro uso. Restore fica fora (decisão do usuário); senha cifrada e teste de restore automático são evoluções futuras.
 
 ## Global Constraints
 

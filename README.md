@@ -4,11 +4,13 @@ Utilitário leve para backup diário de bancos Firebird 2.5 em Windows. Uma exe 
 
 Para cada banco configurado gera, na pasta de destino:
 
-- `NOME_AAAA-MM-DD_HHMM.fbk` — cópia lógica via `gbak -b -g -se localhost:service_mgr`
+- `NOME_AAAA-MM-DD_HHMM.fbk` — cópia lógica via `gbak -b -g -v -se localhost:service_mgr`
 - `NOME_AAAA-MM-DD_HHMM.fdb` — cópia física a quente via `nbackup -L` / cópia / `-N` / `-F`
 - `backup_AAAA-MM-DD.log` e `ultimo-status.ini`
 
-Arquivos com mais de N dias (padrão 7) são apagados; nada fora desse padrão de nome é tocado.
+Arquivos com mais de N dias (padrão 7, pela data no nome) são apagados; nada fora desse padrão de nome é tocado.
+
+O `.fbk` é escrito pelo **processo do servidor Firebird** (via Services API), não pela exe: a pasta de destino precisa ser gravável também pela conta do serviço Firebird (por padrão, `SYSTEM`). A cópia `.fdb` é feita pela exe (ou pela conta da tarefa agendada).
 
 ## Uso no servidor
 

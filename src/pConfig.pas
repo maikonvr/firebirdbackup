@@ -180,6 +180,8 @@ begin
     AErro := 'FirebirdDir: não encontrado nbackup.exe em "' + FirebirdDir + '"'
   else if Trim(Usuario) = '' then
     AErro := 'Usuario: informe o usuário do Firebird'
+  else if Senha = '' then
+    AErro := 'Senha: informe a senha do usuário do Firebird'
   else if Trim(Destino) = '' then
     AErro := 'Destino: informe a pasta de destino'
   else if RetencaoDias < 1 then

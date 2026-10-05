@@ -91,10 +91,7 @@ begin
   begin
     Janela := FindWindow('TFormPrincipal', nil);
     if Janela <> 0 then
-    begin
-      ShowWindow(Janela, SW_RESTORE);
-      SetForegroundWindow(Janela);
-    end;
+      PostMessage(Janela, MensagemAbrir, 0, 0);   // o form se mostra pelo próprio VCL
     Exit;
   end;
   Application.Initialize;

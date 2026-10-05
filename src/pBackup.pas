@@ -42,6 +42,8 @@ type
       const AExt: string): string;
     class function CasaPadraoRetencao(const ANomeArquivo: string;
       const ANomes: TArray<string>): Boolean;
+    // Data embutida no nome (NOME_AAAA-MM-DD_HHNN.* ou backup_AAAA-MM-DD.log); False se não casa
+    class function DataDoNome(const ANomeArquivo: string; out AData: TDateTime): Boolean;
     class function LerUltimaExecucao(const ADestino: string): TDateTime;
     // Mutex global que impede a tarefa agendada e a tela de rodarem ao mesmo tempo
     class function NomeMutexExecucao: string;
@@ -226,12 +228,16 @@ begin
     if FConfig.CopiaFdb then
     begin
       Fdb := NomeArquivoBackup(FConfig.Destino, ABanco.Nome, Quando, '.fdb');
+      // Marcador ANTES do -L: se o processo cair logo depois do -L, a próxima execução destrava.
+      TFile.WriteAllText(MarcadorLock(ABanco.Nome), FormatDateTime('yyyy-mm-dd hh:nn:ss', Quando));
       Codigo := Rodar(FConfig.Nbackup, '-L ' + Aspas(ABanco.Arquivo), Ultima);
       if Codigo <> 0 then
-        Falha('nbackup -L retornou ' + IntToStr(Codigo) + ': ' + Ultima)
+      begin
+        TFile.Delete(MarcadorLock(ABanco.Nome));
+        Falha('nbackup -L retornou ' + IntToStr(Codigo) + ': ' + Ultima);
+      end
       else
       begin
-        TFile.WriteAllText(MarcadorLock(ABanco.Nome), FormatDateTime('yyyy-mm-dd hh:nn:ss', Quando));
         try
           FLog.Escrever('Copiando ' + ABanco.Arquivo + ' -> ' + Fdb);
           if not CopiarArquivo(ABanco.Arquivo, Fdb, Erro) then
@@ -409,9 +415,40 @@ begin
       Exit(True);
 end;
 
+class function TBackup.DataDoNome(const ANomeArquivo: string; out AData: TDateTime): Boolean;
+var
+  Base: string;
+  P, A, M, D, H, N: Integer;
+begin
+  Result := False;
+  AData := 0;
+  Base := ChangeFileExt(ANomeArquivo, '');
+  if SameText(ExtractFileExt(ANomeArquivo), '.log') then
+    P := 7                        // backup_AAAA-MM-DD: data começa na posição 8
+  else
+    P := Length(Base) - 15;       // NOME_AAAA-MM-DD_HHNN: '_' antes da data
+  if (P < 1) or (Length(Base) < P + 10) then
+    Exit;
+  A := StrToIntDef(Copy(Base, P + 1, 4), -1);
+  M := StrToIntDef(Copy(Base, P + 6, 2), -1);
+  D := StrToIntDef(Copy(Base, P + 9, 2), -1);
+  H := 0;
+  N := 0;
+  if not SameText(ExtractFileExt(ANomeArquivo), '.log') then
+  begin
+    H := StrToIntDef(Copy(Base, P + 12, 2), -1);
+    N := StrToIntDef(Copy(Base, P + 14, 2), -1);
+  end;
+  if (A < 0) or (M < 0) or (D < 0) or (H < 0) or (N < 0) then
+    Exit;
+  Result := TryEncodeDateTime(A, M, D, H, N, 0, 0, AData);
+end;
+
+// A data considerada é a do NOME, não a do arquivo: CopyFile preserva a data da origem
+// e um nbackup -F que falhe deixaria a cópia recém-feita com data antiga.
 procedure TBackup.AplicarRetencao;
 var
-  Limite: TDateTime;
+  Limite, DataArq: TDateTime;
   Arq: string;
   Nomes: TArray<string>;
 begin
@@ -421,7 +458,7 @@ begin
     Exit;
   for Arq in TDirectory.GetFiles(FConfig.Destino) do
     if CasaPadraoRetencao(ExtractFileName(Arq), Nomes)
-      and (TFile.GetLastWriteTime(Arq) < Limite) then
+      and DataDoNome(ExtractFileName(Arq), DataArq) and (DataArq < Limite) then
     begin
       try
         TFile.Delete(Arq);
