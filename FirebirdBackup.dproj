@@ -1,0 +1,93 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ProjectGuid>{7F1C2B6E-3A0D-4C58-9E2B-5D7A1B2C3D4E}</ProjectGuid>
+    <ProjectVersion>18.8</ProjectVersion>
+    <FrameworkType>VCL</FrameworkType>
+    <MainSource>FirebirdBackup.dpr</MainSource>
+    <Base>True</Base>
+    <Config Condition="'$(Config)'==''">Release</Config>
+    <Platform Condition="'$(Platform)'==''">Win32</Platform>
+    <TargetedPlatforms>1</TargetedPlatforms>
+    <AppType>Application</AppType>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Config)'=='Base' or '$(Base)'!=''">
+    <Base>true</Base>
+  </PropertyGroup>
+  <PropertyGroup Condition="('$(Platform)'=='Win32' and '$(Base)'=='true') or '$(Base_Win32)'!=''">
+    <Base_Win32>true</Base_Win32>
+    <CfgParent>Base</CfgParent>
+    <Base>true</Base>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Config)'=='Release' or '$(Cfg_1)'!=''">
+    <Cfg_1>true</Cfg_1>
+    <CfgParent>Base</CfgParent>
+    <Base>true</Base>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Config)'=='Debug' or '$(Cfg_2)'!=''">
+    <Cfg_2>true</Cfg_2>
+    <CfgParent>Base</CfgParent>
+    <Base>true</Base>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Base)'!=''">
+    <DCC_DcuOutput>dcu</DCC_DcuOutput>
+    <DCC_ExeOutput>bin</DCC_ExeOutput>
+    <DCC_UnitSearchPath>src;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+    <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;Vcl;Vcl.Imaging;Winapi;$(DCC_Namespace)</DCC_Namespace>
+    <SanitizedProjectName>FirebirdBackup</SanitizedProjectName>
+    <VerInfo_Locale>1046</VerInfo_Locale>
+    <Icon_MainIcon>recursos\app.ico</Icon_MainIcon>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Base_Win32)'!=''">
+    <DCC_UsePackage>vcl;rtl;$(DCC_UsePackage)</DCC_UsePackage>
+    <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Cfg_1)'!=''">
+    <DCC_DebugInformation>0</DCC_DebugInformation>
+    <DCC_Optimize>true</DCC_Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Cfg_2)'!=''">
+    <DCC_Optimize>false</DCC_Optimize>
+    <DCC_DebugInformation>2</DCC_DebugInformation>
+  </PropertyGroup>
+  <ItemGroup>
+    <DelphiCompile Include="$(MainSource)">
+      <MainSource>MainSource</MainSource>
+    </DelphiCompile>
+    <DCCReference Include="src\pConfig.pas"/>
+    <DCCReference Include="src\pLog.pas"/>
+    <DCCReference Include="src\pProcesso.pas"/>
+    <DCCReference Include="src\pBackup.pas"/>
+    <DCCReference Include="src\pAgenda.pas"/>
+    <DCCReference Include="src\pPrincipal.pas">
+      <Form>FormPrincipal</Form>
+    </DCCReference>
+    <BuildConfiguration Include="Base">
+      <Key>Base</Key>
+    </BuildConfiguration>
+    <BuildConfiguration Include="Release">
+      <Key>Cfg_1</Key>
+      <CfgParent>Base</CfgParent>
+    </BuildConfiguration>
+    <BuildConfiguration Include="Debug">
+      <Key>Cfg_2</Key>
+      <CfgParent>Base</CfgParent>
+    </BuildConfiguration>
+  </ItemGroup>
+  <ProjectExtensions>
+    <Borland.Personality>Delphi.Personality.12</Borland.Personality>
+    <Borland.ProjectType>VCLApplication</Borland.ProjectType>
+    <BorlandProject>
+      <Delphi.Personality>
+        <Source>
+          <Source Name="MainSource">FirebirdBackup.dpr</Source>
+        </Source>
+      </Delphi.Personality>
+      <Platforms>
+        <Platform value="Win32">True</Platform>
+      </Platforms>
+    </BorlandProject>
+    <ProjectFileVersion>12</ProjectFileVersion>
+  </ProjectExtensions>
+  <Import Project="$(BDS)\Bin\CodeGear.Delphi.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Delphi.Targets')"/>
+  <Import Project="$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(BDSVER)\UserTools.proj" Condition="Exists('$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(BDSVER)\UserTools.proj')"/>
+</Project>

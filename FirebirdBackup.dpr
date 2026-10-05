@@ -11,6 +11,8 @@ uses
   pAgenda in 'src\pAgenda.pas',
   pPrincipal in 'src\pPrincipal.pas' {FormPrincipal};
 
+{$R *.res}
+
 function ModoRun: Integer;
 var
   Config: TConfig;

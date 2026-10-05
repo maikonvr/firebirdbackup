@@ -5,3 +5,4 @@ dcu/
 *.stat
 __history/
 backup.ini
+*.res
