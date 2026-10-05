@@ -8,7 +8,9 @@ uses
   DUnitX.Loggers.Console,
   pTesteSanidade in 'pTesteSanidade.pas',
   pConfig in '..\src\pConfig.pas',
-  pTesteConfig in 'pTesteConfig.pas';
+  pTesteConfig in 'pTesteConfig.pas',
+  pLog in '..\src\pLog.pas',
+  pTesteLog in 'pTesteLog.pas';
 
 var
   Runner: ITestRunner;
