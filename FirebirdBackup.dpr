@@ -13,6 +13,8 @@ uses
 
 {$R *.res}
 
+// Nunca deixa uma exceção escapar: em app GUI sem console ela viraria um MessageBox
+// que, na sessão 0 do Agendador (conta SYSTEM), ninguém fecha e a tarefa fica pendurada.
 function ModoRun: Integer;
 var
   Config: TConfig;
@@ -20,36 +22,53 @@ var
   Backup: TBackup;
   Erro: string;
 begin
-  Config := TConfig.Create;
   try
-    Config.Carregar(TConfig.ArquivoPadrao);
-    if not Config.Validar(Erro) then
-    begin
-      // Sem destino válido não há onde logar: grava ao lado da exe
-      Log := TLog.Create(ExtractFilePath(ParamStr(0)));
+    Config := TConfig.Create;
+    try
+      Config.Carregar(TConfig.ArquivoPadrao);
+      if not Config.Validar(Erro) then
+      begin
+        // Sem destino válido não há onde logar: grava ao lado da exe
+        Log := TLog.Create(ExtractFilePath(ParamStr(0)));
+        try
+          Log.Escrever('Configuração inválida: ' + Erro);
+        finally
+          Log.Free;
+        end;
+        Exit(2);
+      end;
+      Log := TLog.Create(Config.Destino);
       try
-        Log.Escrever('Configuração inválida: ' + Erro);
+        Backup := TBackup.Create(Config, Log);
+        try
+          if Backup.Executar then
+            Result := 0
+          else
+            Result := 1;
+        finally
+          Backup.Free;
+        end;
       finally
         Log.Free;
       end;
-      Exit(2);
-    end;
-    Log := TLog.Create(Config.Destino);
-    try
-      Backup := TBackup.Create(Config, Log);
-      try
-        if Backup.Executar then
-          Result := 0
-        else
-          Result := 1;
-      finally
-        Backup.Free;
-      end;
     finally
-      Log.Free;
+      Config.Free;
     end;
-  finally
-    Config.Free;
+  except
+    on E: Exception do
+    begin
+      try
+        Log := TLog.Create(ExtractFilePath(ParamStr(0)));
+        try
+          Log.Escrever('ERRO fatal: ' + E.ClassName + ': ' + E.Message);
+        finally
+          Log.Free;
+        end;
+      except
+        // sem onde registrar; o código de saída 1 é o que resta
+      end;
+      Result := 1;
+    end;
   end;
 end;
 

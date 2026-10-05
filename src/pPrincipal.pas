@@ -71,7 +71,9 @@ type
     procedure PreencherBancos;
     procedure CarregarUltimoStatus;
     function EditarBanco(var ABanco: TBancoConfig): Boolean;
-    procedure IniciarBackup(const AOrigem: string);
+    function CopiarConfig(AOrigem: TConfig): TConfig;
+    // AConfig: cópia que passa a pertencer à thread (liberada por ela)
+    procedure IniciarBackup(const AOrigem: string; AConfig: TConfig);
     procedure AoTerminar(AOk: Boolean);
     procedure Habilitar(AAtivo: Boolean);
     procedure LimitarMemo;
@@ -347,30 +349,36 @@ begin
   end;
 end;
 
-procedure TFormPrincipal.IniciarBackup(const AOrigem: string);
+function TFormPrincipal.CopiarConfig(AOrigem: TConfig): TConfig;
 var
-  Erro: string;
-  Config: TConfig;
   B: TBancoConfig;
 begin
+  Result := TConfig.Create;
+  Result.FirebirdDir := AOrigem.FirebirdDir; Result.Usuario := AOrigem.Usuario;
+  Result.Senha := AOrigem.Senha; Result.Destino := AOrigem.Destino;
+  Result.RetencaoDias := AOrigem.RetencaoDias; Result.Horario := AOrigem.Horario;
+  Result.CopiaFbk := AOrigem.CopiaFbk; Result.CopiaFdb := AOrigem.CopiaFdb;
+  for B in AOrigem.Bancos do
+    Result.Bancos.Add(B);
+end;
+
+procedure TFormPrincipal.IniciarBackup(const AOrigem: string; AConfig: TConfig);
+var
+  Config: TConfig;
+begin
+  Config := AConfig;
   if FExecutando then
-    Exit;
-  if not TelaParaConfig(Erro) then
   begin
-    memoLog.Lines.Add('Configuração inválida: ' + Erro);
-    if AOrigem <> 'timer' then
-      MessageDlg(Erro, mtError, [mbOK], 0);
+    memoLog.Lines.Add('Pedido (' + AOrigem + ') ignorado: backup já em andamento nesta janela');
+    Config.Free;
     Exit;
   end;
-  FConfig.Salvar(TConfig.ArquivoPadrao);
-  // cópia da config para a thread não disputar com a tela
-  Config := TConfig.Create;
-  Config.FirebirdDir := FConfig.FirebirdDir; Config.Usuario := FConfig.Usuario;
-  Config.Senha := FConfig.Senha; Config.Destino := FConfig.Destino;
-  Config.RetencaoDias := FConfig.RetencaoDias; Config.Horario := FConfig.Horario;
-  Config.CopiaFbk := FConfig.CopiaFbk; Config.CopiaFdb := FConfig.CopiaFdb;
-  for B in FConfig.Bancos do
-    Config.Bancos.Add(B);
+  if TBackup.OutroEmAndamento then
+  begin
+    memoLog.Lines.Add('Pedido (' + AOrigem + ') ignorado: backup já em andamento em outro processo (tarefa agendada?)');
+    Config.Free;
+    Exit;
+  end;
   FExecutando := True;
   Habilitar(False);
   memoLog.Lines.Add('--- Backup iniciado (' + AOrigem + ')');
@@ -383,20 +391,31 @@ begin
     begin
       Ok := False;
       try
-        Log := TLog.Create(Config.Destino);
         try
-          Log.OnLinha := procedure(const L: string)
-            begin
-              TThread.Queue(nil, procedure begin memoLog.Lines.Add(L); end);
-            end;
-          Backup := TBackup.Create(Config, Log);
+          Log := TLog.Create(Config.Destino);
           try
-            Ok := Backup.Executar;
+            Log.OnLinha := procedure(const L: string)
+              begin
+                TThread.Queue(nil, procedure begin memoLog.Lines.Add(L); end);
+              end;
+            Backup := TBackup.Create(Config, Log);
+            try
+              Ok := Backup.Executar;
+            finally
+              Backup.Free;
+            end;
           finally
-            Backup.Free;
+            Log.Free;
           end;
-        finally
-          Log.Free;
+        except
+          on E: Exception do
+          begin
+            Ok := False;
+            TThread.Queue(nil, procedure
+              begin
+                memoLog.Lines.Add('ERRO fatal: ' + E.ClassName + ': ' + E.Message);
+              end);
+          end;
         end;
       finally
         Config.Free;
@@ -420,21 +439,52 @@ begin
   end;
 end;
 
+// Executar agora usa o que está na tela e salva, como o botão Salvar faria.
 procedure TFormPrincipal.btnExecutarClick(Sender: TObject);
-begin
-  IniciarBackup('manual');
-end;
-
-procedure TFormPrincipal.TimerTimer(Sender: TObject);
 var
   Erro: string;
 begin
   if FExecutando then
+  begin
+    memoLog.Lines.Add('Pedido (manual) ignorado: backup já em andamento nesta janela');
     Exit;
+  end;
   if not TelaParaConfig(Erro) then
+  begin
+    memoLog.Lines.Add('Configuração inválida: ' + Erro);
+    MessageDlg(Erro, mtError, [mbOK], 0);
     Exit;
-  if DeveDisparar(Now, FConfig.Horario, TBackup.LerUltimaExecucao(FConfig.Destino)) then
-    IniciarBackup('timer');
+  end;
+  FConfig.Salvar(TConfig.ArquivoPadrao);
+  IniciarBackup('manual', CopiarConfig(FConfig));
+end;
+
+// O timer só considera a configuração SALVA (backup.ini): o que está sendo digitado na
+// tela não entra, e nada é gravado sem o usuário clicar em Salvar.
+procedure TFormPrincipal.TimerTimer(Sender: TObject);
+var
+  Salva: TConfig;
+  Erro: string;
+begin
+  if FExecutando or not TFile.Exists(TConfig.ArquivoPadrao) then
+    Exit;
+  Salva := TConfig.Create;
+  try
+    Salva.Carregar(TConfig.ArquivoPadrao);
+    if not TConfig.HorarioValido(Salva.Horario) or (Salva.Destino = '') then
+      Exit;
+    if not DeveDisparar(Now, Salva.Horario, TBackup.LerUltimaExecucao(Salva.Destino)) then
+      Exit;
+    if not Salva.Validar(Erro) then
+    begin
+      memoLog.Lines.Add('Timer: configuração salva inválida: ' + Erro);
+      Exit;
+    end;
+  except
+    Salva.Free;
+    raise;
+  end;
+  IniciarBackup('timer', Salva);
 end;
 
 procedure TFormPrincipal.miAbrirClick(Sender: TObject);

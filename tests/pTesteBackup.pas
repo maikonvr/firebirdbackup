@@ -6,7 +6,7 @@ interface
 
 uses
   DUnitX.TestFramework, System.SysUtils, System.Classes, System.IOUtils, System.IniFiles,
-  System.Generics.Collections, System.StrUtils, pConfig, pLog, pProcesso, pBackup;
+  System.Generics.Collections, System.StrUtils, Winapi.Windows, pConfig, pLog, pProcesso, pBackup;
 
 type
   [TestFixture]
@@ -18,6 +18,7 @@ type
     FChamadas: TStringList;      // "exe|args"
     FAmbientes: TStringList;     // "ISC_USER;ISC_PASSWORD" por chamada
     FCodigos: TDictionary<string, Integer>; // prefixo de "exe|args" -> exit code (padrão 0)
+    FLevantar: string;           // prefixo de "exe|args" que faz o executor falso levantar EProcesso
     procedure CriarArquivo(const ANome: string; ADataModif: TDateTime; ATamanho: Integer = 0);
     procedure AddBanco(const ANome: string);
     function ExecutorFalso: TExecutor;
@@ -40,6 +41,11 @@ type
     [Test] procedure TestEspacoInsuficientePulaBanco;
     [Test] procedure TestExecutarTodosGravaStatusERetencao;
     [Test] procedure TestSenhaNaoVaiParaOLog;
+    [Test] procedure TestExcecaoNoExecutorViraFalhaENaoImpedeSeguinte;
+    [Test] procedure TestLockPendenteRecuperacaoFalhaMantemMarcador;
+    [Test] procedure TestExecutarConcorrenteSaiComAviso;
+    [Test] procedure TestStatusUsaHoraDeInicio;
+    [Test] procedure TestExecutarComDestinoInvalidoNaoLevanta;
   end;
 
 implementation
@@ -75,12 +81,15 @@ end;
 
 function TTesteBackup.ExecutorFalso: TExecutor;
 begin
-  Result := function(const AExe, AArgs: string; AAmbiente: TStrings; AOnLinha: TLinhaEvento): Integer
+  Result := function(const AExe, AArgs: string; AAmbiente: TStrings; AOnLinha: TLinhaEvento;
+    ATimeoutMs: Cardinal): Integer
     var
       Chave: string;
       Destino: string;
     begin
       FChamadas.Add(ExtractFileName(AExe) + '|' + AArgs);
+      if (FLevantar <> '') and StartsText(FLevantar, ExtractFileName(AExe) + '|' + AArgs) then
+        raise EProcesso.Create('falha simulada ao executar ' + ExtractFileName(AExe));
       if Assigned(AAmbiente) then
         FAmbientes.Add(AAmbiente.Values['ISC_USER'] + ';' + AAmbiente.Values['ISC_PASSWORD'])
       else
@@ -195,7 +204,7 @@ begin
   Bk := TBackup.Create(FConfig, FLog);
   try
     Bk.Agora := R[0].Inicio;
-    Bk.GravarStatus(R);
+    Bk.GravarStatus(R, R[0].Inicio);
   finally
     Bk.Free;
   end;
@@ -464,6 +473,123 @@ begin
   Texto := TFile.ReadAllText(TLog.NomeArquivo(FDestino, EncodeDate(2026, 10, 5)));
   Assert.DoesNotContain(Texto, 'segredo');
   Assert.Contains(Texto, 'gbak');
+end;
+
+procedure TTesteBackup.TestExcecaoNoExecutorViraFalhaENaoImpedeSeguinte;
+var
+  Bk: TBackup;
+  Ini: TIniFile;
+  Hoje: TDateTime;
+begin
+  AddBanco('AG');
+  AddBanco('XY');
+  FConfig.CopiaFdb := False;
+  Hoje := Trunc(Date) + EncodeTime(2, 0, 0, 0);
+  FLevantar := 'gbak.exe|-b -g -v -se localhost:service_mgr "' + FConfig.Bancos[0].Arquivo;
+  Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
+  try
+    Bk.Agora := Hoje;
+    Bk.EspacoLivreFixo := High(Int64);
+    Assert.IsFalse(Bk.Executar, 'AG falhou por exceção');
+  finally
+    Bk.Free;
+  end;
+  Assert.AreEqual(2, FChamadas.Count, 'XY ainda roda');
+  Assert.IsTrue(TFile.Exists(TBackup.NomeArquivoBackup(FDestino, 'XY', Hoje, '.fbk')));
+  Ini := TIniFile.Create(TPath.Combine(FDestino, 'ultimo-status.ini'));
+  try
+    Assert.AreEqual('ERRO', Ini.ReadString('AG', 'Resultado', ''));
+    Assert.Contains(Ini.ReadString('AG', 'Mensagem', ''), 'falha simulada');
+    Assert.AreEqual('OK', Ini.ReadString('XY', 'Resultado', ''));
+  finally
+    Ini.Free;
+  end;
+end;
+
+procedure TTesteBackup.TestLockPendenteRecuperacaoFalhaMantemMarcador;
+var
+  Bk: TBackup;
+  R: TResultadoBanco;
+begin
+  AddBanco('AG');
+  FConfig.CopiaFdb := False;   // só fbk: nenhum -N normal depois
+  TFile.WriteAllText(TPath.Combine(FDestino, 'AG.lock-pendente'), '');
+  FCodigos.Add('nbackup.exe|-N', 1);   // serviço fora do ar, por exemplo
+  Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
+  try
+    Bk.EspacoLivreFixo := High(Int64);
+    R := Bk.ExecutarBanco(FConfig.Bancos[0]);
+  finally
+    Bk.Free;
+  end;
+  Assert.IsTrue(R.OK, 'recuperação que falha é aviso, não erro do banco');
+  Assert.IsTrue(TFile.Exists(TPath.Combine(FDestino, 'AG.lock-pendente')),
+    'marcador fica para tentar destravar de novo na próxima execução');
+end;
+
+procedure TTesteBackup.TestExecutarConcorrenteSaiComAviso;
+var
+  Bk: TBackup;
+  Mutex: THandle;
+  Texto: string;
+begin
+  AddBanco('AG');
+  Mutex := CreateMutex(nil, True, PChar(TBackup.NomeMutexExecucao));
+  Assert.AreNotEqual(THandle(0), Mutex);
+  try
+    Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
+    try
+      Bk.Agora := EncodeDate(2026, 10, 5);
+      Bk.EspacoLivreFixo := High(Int64);
+      Assert.IsFalse(Bk.Executar);
+    finally
+      Bk.Free;
+    end;
+  finally
+    ReleaseMutex(Mutex);
+    CloseHandle(Mutex);
+  end;
+  Assert.AreEqual(0, FChamadas.Count, 'nada executado');
+  Texto := TFile.ReadAllText(TLog.NomeArquivo(FDestino, EncodeDate(2026, 10, 5)));
+  Assert.Contains(Texto, 'em andamento');
+end;
+
+procedure TTesteBackup.TestStatusUsaHoraDeInicio;
+var
+  Bk: TBackup;
+  R: TArray<TResultadoBanco>;
+  Inicio: TDateTime;
+begin
+  AddBanco('AG');
+  SetLength(R, 1);
+  Inicio := EncodeDate(2026, 10, 5) + EncodeTime(23, 50, 0, 0);
+  R[0].Nome := 'AG'; R[0].Inicio := Inicio; R[0].Fim := Inicio + EncodeTime(0, 20, 0, 0); R[0].OK := True;
+  Bk := TBackup.Create(FConfig, FLog);
+  try
+    Bk.Agora := R[0].Fim;   // já é o dia seguinte, 00:10
+    Bk.GravarStatus(R, Inicio);
+  finally
+    Bk.Free;
+  end;
+  Assert.AreEqual(Inicio, TBackup.LerUltimaExecucao(FDestino), 0.00001,
+    'UltimaExecucao deve ser a hora de início, senão o timer pula o dia seguinte');
+end;
+
+procedure TTesteBackup.TestExecutarComDestinoInvalidoNaoLevanta;
+var
+  Bk: TBackup;
+  Ok: Boolean;
+begin
+  AddBanco('AG');
+  FConfig.Destino := 'Z:\pasta\que\nao\existe';
+  Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
+  try
+    Ok := True;
+    Assert.WillNotRaise(procedure begin Ok := Bk.Executar; end);
+    Assert.IsFalse(Ok);
+  finally
+    Bk.Free;
+  end;
 end;
 
 initialization

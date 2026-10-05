@@ -25,7 +25,16 @@
 - Ícone gerado por script (32×32) porque `brcc32` rejeita o `.ico` padrão do Delphi (camadas PNG 256px).
 - Ajustes só em código de teste: `AddStrings` com open array, `echo erro>&2`, `ExecutorFalso()`, data real no teste de retenção.
 
-**Pendências**: nenhuma na v1. Restore fica fora (decisão do usuário); senha cifrada e teste de restore automático são evoluções futuras.
+**Revisão final independente (2026-10-05) e correções aplicadas** (suíte passou a 48 testes)
+- Crítico: `--run` sem guarda de exceção podia deixar a tarefa agendada pendurada em um MessageBox na sessão 0. Agora `ModoRun` captura tudo e sai com 1; cada banco converte exceção em falha própria (`TestExcecaoNoExecutorViraFalhaENaoImpedeSeguinte`); retenção e status protegidos (`TestExecutarComDestinoInvalidoNaoLevanta`); a thread da tela loga `ERRO fatal`. Verificado com destino inválido (`exit 2`) e `ultimo-status.ini` não gravável (`exit 1`, sem travar).
+- Marcador `.lock-pendente` só é apagado quando o `-N` de recuperação retorna 0 (`TestLockPendenteRecuperacaoFalhaMantemMarcador`).
+- Mutex global `Global\FirebirdBackup_Execucao` em `TBackup.Executar`: tarefa agendada e tela não rodam ao mesmo tempo; o segundo registra "já em andamento" (`TestExecutarConcorrenteSaiComAviso`). A tela também checa antes de iniciar.
+- Saída de `gbak`/`nbackup` é ANSI, não OEM: conversão OEM virou opcional (`AConverterOem`), usada só pelo `schtasks` (`TestSaidaAnsiSemConversaoPorPadrao`, `TestSaidaOemConvertida`).
+- Timer usa só a configuração salva no `backup.ini` e não grava nada; `Executar agora` continua salvando a tela. Verificado: destino digitado e não salvo foi ignorado e não persistido.
+- Tempo limite por processo (padrão 6 h em `TBackup.TimeoutMs`) com polling do pipe e `TerminateProcess` (`TestTimeoutEncerraProcesso`); `schtasks` com 60 s.
+- `UltimaExecucao` passa a ser a hora de início do run, senão um backup que cruza a meia-noite faz o timer pular o dia seguinte (`TestStatusUsaHoraDeInicio`).
+
+**Pendências menores registradas (não corrigidas)**: marcador escrito só após o `-L` (janela mínima); retenção por `LastWriteTime` em vez da data do nome; segunda instância restaurada por `ShowWindow` externo pode deixar o `Hide` sem efeito; `LimitarMemo` só ao terminar; `Validar` não exige senha; README não cita que o destino precisa ser gravável pela conta do serviço Firebird e omite o `-v`; integração validada só no Firebird 3.0 (fazer um `--run` de teste no 2.5 real antes do primeiro uso). Restore fica fora (decisão do usuário); senha cifrada e teste de restore automático são evoluções futuras.
 
 ## Global Constraints
 

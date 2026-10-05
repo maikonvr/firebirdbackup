@@ -38,8 +38,9 @@ begin
   Linhas := TStringList.Create;
   try
     Schtasks := IncludeTrailingPathDelimiter(GetEnvironmentVariable('SystemRoot')) + 'System32\schtasks.exe';
+    // schtasks é app de console: escreve em OEM; 60 s de limite
     Result := ExecutarProcesso(Schtasks, ArgumentosSchtasks(AExe, AHorario), nil,
-      procedure(const L: string) begin Linhas.Add(L); end) = 0;
+      procedure(const L: string) begin Linhas.Add(L); end, 60000, True) = 0;
     ASaida := Linhas.Text.Trim;
   finally
     Linhas.Free;

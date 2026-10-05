@@ -3,7 +3,7 @@
 interface
 
 uses
-  DUnitX.TestFramework, System.SysUtils, System.Classes, pProcesso;
+  DUnitX.TestFramework, System.SysUtils, System.Classes, System.IOUtils, pProcesso;
 
 type
   [TestFixture]
@@ -16,6 +16,8 @@ type
     [Test] procedure TestAmbienteChegaAoFilho;
     [Test] procedure TestExeInexistenteLevantaExcecao;
     [Test] procedure TestSaidaOemConvertida;
+    [Test] procedure TestSaidaAnsiSemConversaoPorPadrao;
+    [Test] procedure TestTimeoutEncerraProcesso;
     [Test] procedure TestAspas;
   end;
 
@@ -95,15 +97,47 @@ procedure TTesteProcesso.TestSaidaOemConvertida;
 var
   Linhas: TStringList;
 begin
-  // cmd.exe escreve na codepage OEM (850/437); "ção" precisa chegar legível.
+  // cmd.exe/schtasks escrevem na codepage OEM (850/437); com AConverterOem "ção" chega legível.
   Linhas := TStringList.Create;
   try
     ExecutarProcesso(Cmd, '/c "echo ação"', nil,
-      procedure(const L: string) begin Linhas.Add(L); end);
+      procedure(const L: string) begin Linhas.Add(L); end, 0, True);
     Assert.AreEqual('ação', Linhas[0]);
   finally
     Linhas.Free;
   end;
+end;
+
+procedure TTesteProcesso.TestSaidaAnsiSemConversaoPorPadrao;
+var
+  Linhas: TStringList;
+  Arq: string;
+begin
+  // gbak/nbackup escrevem em ANSI (cp1252): por padrão a saída não é convertida.
+  // "type" de um arquivo com os bytes cp1252 de "ação" (61 E7 E3 6F) simula isso.
+  Arq := TPath.Combine(TPath.GetTempPath, 'fbbk_ansi_' + TPath.GetGUIDFileName + '.txt');
+  TFile.WriteAllBytes(Arq, TBytes.Create($61, $E7, $E3, $6F, 13, 10));
+  Linhas := TStringList.Create;
+  try
+    ExecutarProcesso(Cmd, '/c "type ' + Aspas(Arq) + '"', nil,
+      procedure(const L: string) begin Linhas.Add(L); end);
+    Assert.AreEqual('ação', Linhas[0]);
+  finally
+    Linhas.Free;
+    TFile.Delete(Arq);
+  end;
+end;
+
+procedure TTesteProcesso.TestTimeoutEncerraProcesso;
+var
+  Codigo: Integer;
+  Inicio: TDateTime;
+begin
+  // processo que ficaria 30 s vivo deve ser encerrado em ~2 s e retornar CodigoTimeout
+  Inicio := Now;
+  Codigo := ExecutarProcesso(Cmd, '/c "ping -n 30 127.0.0.1 >nul"', nil, nil, 2000);
+  Assert.AreEqual(CodigoTimeout, Codigo);
+  Assert.IsTrue((Now - Inicio) * 86400 < 15, 'deveria encerrar perto do timeout');
 end;
 
 procedure TTesteProcesso.TestAspas;

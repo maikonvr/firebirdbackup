@@ -23,6 +23,7 @@ type
     FExecutor: TExecutor;
     FAgora: TDateTime;
     FEspacoLivreFixo: Int64;
+    FTimeoutMs: Cardinal;
     function Momento: TDateTime;
     function NomesBancos: TArray<string>;
     function Ambiente: TStrings;
@@ -35,14 +36,20 @@ type
     function ExecutarBanco(const ABanco: TBancoConfig): TResultadoBanco;
     function EspacoLivre(const APasta: string): Int64; virtual;
     procedure AplicarRetencao;
-    procedure GravarStatus(const AResultados: TArray<TResultadoBanco>);
+    // AInicio: hora de início da execução; é o que o timer compara com a data de hoje
+    procedure GravarStatus(const AResultados: TArray<TResultadoBanco>; AInicio: TDateTime);
     class function NomeArquivoBackup(const ADestino, ANome: string; AQuando: TDateTime;
       const AExt: string): string;
     class function CasaPadraoRetencao(const ANomeArquivo: string;
       const ANomes: TArray<string>): Boolean;
     class function LerUltimaExecucao(const ADestino: string): TDateTime;
+    // Mutex global que impede a tarefa agendada e a tela de rodarem ao mesmo tempo
+    class function NomeMutexExecucao: string;
+    class function OutroEmAndamento: Boolean;
     property Agora: TDateTime read FAgora write FAgora;
     property EspacoLivreFixo: Int64 read FEspacoLivreFixo write FEspacoLivreFixo;
+    // Tempo máximo de cada gbak/nbackup; 0 = sem limite. Padrão 6 h.
+    property TimeoutMs: Cardinal read FTimeoutMs write FTimeoutMs;
   end;
 
 implementation
@@ -70,10 +77,34 @@ begin
   FConfig := AConfig;
   FLog := ALog;
   FEspacoLivreFixo := -1;
+  FTimeoutMs := 6 * 60 * 60 * 1000;
   if Assigned(AExecutor) then
     FExecutor := AExecutor
   else
-    FExecutor := ExecutarProcesso;
+    FExecutor := function(const AExe, AArgs: string; AAmbiente: TStrings; AOnLinha: TLinhaEvento;
+      ATimeoutMs: Cardinal): Integer
+      begin
+        Result := ExecutarProcesso(AExe, AArgs, AAmbiente, AOnLinha, ATimeoutMs);
+      end;
+end;
+
+class function TBackup.NomeMutexExecucao: string;
+begin
+  Result := 'Global\FirebirdBackup_Execucao';
+end;
+
+class function TBackup.OutroEmAndamento: Boolean;
+var
+  M: THandle;
+begin
+  M := CreateMutex(nil, True, PChar(NomeMutexExecucao));
+  Result := (M <> 0) and (GetLastError = ERROR_ALREADY_EXISTS);
+  if M <> 0 then
+  begin
+    if not Result then
+      ReleaseMutex(M);
+    CloseHandle(M);
+  end;
 end;
 
 function TBackup.Ambiente: TStrings;
@@ -100,7 +131,7 @@ begin
           Ultima := L;
           FLog.Escrever('  ' + L);
         end;
-      end);
+      end, FTimeoutMs);
   finally
     Amb.Free;
   end;
@@ -155,15 +186,19 @@ begin
   Erro := '';
   Erros := TStringList.Create;
   try
+   try
     FLog.Escrever('=== Banco ' + ABanco.Nome + ' (' + ABanco.Arquivo + ')');
-    // 1. Recuperação de lock pendente
+    // 1. Recuperação de lock pendente. O marcador só sai quando o -N dá certo:
+    //    se falhou por motivo transitório, a próxima execução tenta de novo.
     if TFile.Exists(MarcadorLock(ABanco.Nome)) then
     begin
       FLog.Escrever('Marcador de lock pendente encontrado; destravando antes de continuar');
       Codigo := Rodar(FConfig.Nbackup, '-N ' + Aspas(ABanco.Arquivo), Ultima);
-      if Codigo <> 0 then
-        FLog.Escrever('Aviso: nbackup -N retornou ' + IntToStr(Codigo) + ' (' + Ultima + '); seguindo');
-      TFile.Delete(MarcadorLock(ABanco.Nome));
+      if Codigo = 0 then
+        TFile.Delete(MarcadorLock(ABanco.Nome))
+      else
+        FLog.Escrever('Aviso: nbackup -N retornou ' + IntToStr(Codigo) + ' (' + Ultima +
+          '); marcador mantido para nova tentativa');
     end;
     // 2. Espaço livre
     Necessario := 0;
@@ -218,6 +253,12 @@ begin
         end;
       end;
     end;
+   except
+    // Exceção inesperada (CreateProcess, disco, marcador) vira falha deste banco,
+    // nunca derruba o processo: no --run isso deixaria a tarefa agendada pendurada.
+    on E: Exception do
+      Falha(E.ClassName + ': ' + E.Message);
+   end;
   finally
     Result.Fim := Momento;
     Result.OK := Erros.Count = 0;
@@ -234,18 +275,52 @@ function TBackup.Executar: Boolean;
 var
   Resultados: TArray<TResultadoBanco>;
   I: Integer;
+  Inicio: TDateTime;
+  Mutex: THandle;
 begin
-  Result := True;
-  FLog.Escrever('Início do backup');
-  SetLength(Resultados, FConfig.Bancos.Count);
-  for I := 0 to FConfig.Bancos.Count - 1 do
+  Mutex := CreateMutex(nil, True, PChar(NomeMutexExecucao));
+  if (Mutex <> 0) and (GetLastError = ERROR_ALREADY_EXISTS) then
   begin
-    Resultados[I] := ExecutarBanco(FConfig.Bancos[I]);
-    Result := Result and Resultados[I].OK;
+    CloseHandle(Mutex);
+    FLog.Escrever('Backup já em andamento em outro processo; esta execução foi ignorada');
+    Exit(False);
   end;
-  AplicarRetencao;
-  GravarStatus(Resultados);
-  FLog.Escrever('Fim do backup: ' + IfThen(Result, 'OK', 'ERRO'));
+  try
+    Result := True;
+    Inicio := Momento;
+    FLog.Escrever('Início do backup');
+    SetLength(Resultados, FConfig.Bancos.Count);
+    for I := 0 to FConfig.Bancos.Count - 1 do
+    begin
+      Resultados[I] := ExecutarBanco(FConfig.Bancos[I]);
+      Result := Result and Resultados[I].OK;
+    end;
+    try
+      AplicarRetencao;
+    except
+      on E: Exception do
+      begin
+        FLog.Escrever('ERRO na retenção: ' + E.ClassName + ': ' + E.Message);
+        Result := False;
+      end;
+    end;
+    try
+      GravarStatus(Resultados, Inicio);
+    except
+      on E: Exception do
+      begin
+        FLog.Escrever('ERRO ao gravar ultimo-status.ini: ' + E.ClassName + ': ' + E.Message);
+        Result := False;
+      end;
+    end;
+    FLog.Escrever('Fim do backup: ' + IfThen(Result, 'OK', 'ERRO'));
+  finally
+    if Mutex <> 0 then
+    begin
+      ReleaseMutex(Mutex);
+      CloseHandle(Mutex);
+    end;
+  end;
 end;
 
 function TBackup.Momento: TDateTime;
@@ -358,7 +433,7 @@ begin
     end;
 end;
 
-procedure TBackup.GravarStatus(const AResultados: TArray<TResultadoBanco>);
+procedure TBackup.GravarStatus(const AResultados: TArray<TResultadoBanco>; AInicio: TDateTime);
 var
   Ini: TIniFile;
   R: TResultadoBanco;
@@ -369,7 +444,7 @@ begin
     Todos := Todos and R.OK;
   Ini := TIniFile.Create(TPath.Combine(FConfig.Destino, 'ultimo-status.ini'));
   try
-    Ini.WriteString('Geral', 'UltimaExecucao', FormatDateTime('yyyy-mm-dd hh:nn:ss', Momento));
+    Ini.WriteString('Geral', 'UltimaExecucao', FormatDateTime('yyyy-mm-dd hh:nn:ss', AInicio));
     Ini.WriteString('Geral', 'Resultado', IfThen(Todos, 'OK', 'ERRO'));
     for R in AResultados do
     begin
