@@ -1,0 +1,7 @@
+bin/
+dcu/
+*.local
+*.identcache
+*.stat
+__history/
+backup.ini

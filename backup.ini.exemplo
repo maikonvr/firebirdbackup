@@ -1,0 +1,17 @@
+[Geral]
+FirebirdDir=C:\Program Files\Firebird\Firebird_2_5
+Usuario=SYSDBA
+Senha=masterkey
+Destino=D:\Backup
+RetencaoDias=7
+Horario=02:00
+CopiaFbk=1
+CopiaFdb=1
+
+[Banco1]
+Nome=AG2006
+Arquivo=D:\Dados\AG2006.FDB
+
+[Banco2]
+Nome=OUTRO
+Arquivo=D:\Dados\OUTRO.FDB

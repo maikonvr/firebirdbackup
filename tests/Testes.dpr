@@ -1,0 +1,31 @@
+﻿program Testes;
+
+{$APPTYPE CONSOLE}
+
+uses
+  System.SysUtils,
+  DUnitX.TestFramework,
+  DUnitX.Loggers.Console,
+  pTesteSanidade in 'pTesteSanidade.pas';
+
+var
+  Runner: ITestRunner;
+  Logger: ITestLogger;
+  Resultados: IRunResults;
+begin
+  try
+    Runner := TDUnitX.CreateRunner;
+    Runner.UseRTTI := True;
+    Logger := TDUnitXConsoleLogger.Create(True);
+    Runner.AddLogger(Logger);
+    Resultados := Runner.Execute;
+    if not Resultados.AllPassed then
+      ExitCode := 1;
+  except
+    on E: Exception do
+    begin
+      Writeln(E.ClassName, ': ', E.Message);
+      ExitCode := 2;
+    end;
+  end;
+end.
