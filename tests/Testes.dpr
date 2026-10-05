@@ -6,7 +6,9 @@ uses
   System.SysUtils,
   DUnitX.TestFramework,
   DUnitX.Loggers.Console,
-  pTesteSanidade in 'pTesteSanidade.pas';
+  pTesteSanidade in 'pTesteSanidade.pas',
+  pConfig in '..\src\pConfig.pas',
+  pTesteConfig in 'pTesteConfig.pas';
 
 var
   Runner: ITestRunner;
