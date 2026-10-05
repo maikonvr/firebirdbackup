@@ -10,7 +10,9 @@ uses
   pConfig in '..\src\pConfig.pas',
   pTesteConfig in 'pTesteConfig.pas',
   pLog in '..\src\pLog.pas',
-  pTesteLog in 'pTesteLog.pas';
+  pTesteLog in 'pTesteLog.pas',
+  pProcesso in '..\src\pProcesso.pas',
+  pTesteProcesso in 'pTesteProcesso.pas';
 
 var
   Runner: ITestRunner;
