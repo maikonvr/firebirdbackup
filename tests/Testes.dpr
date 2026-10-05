@@ -14,7 +14,9 @@ uses
   pProcesso in '..\src\pProcesso.pas',
   pTesteProcesso in 'pTesteProcesso.pas',
   pBackup in '..\src\pBackup.pas',
-  pTesteBackup in 'pTesteBackup.pas';
+  pTesteBackup in 'pTesteBackup.pas',
+  pAgenda in '..\src\pAgenda.pas',
+  pTesteAgenda in 'pTesteAgenda.pas';
 
 var
   Runner: ITestRunner;
