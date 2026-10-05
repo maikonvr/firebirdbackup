@@ -22,10 +22,18 @@ type
     FLog: TLog;
     FExecutor: TExecutor;
     FAgora: TDateTime;
+    FEspacoLivreFixo: Int64;
     function Momento: TDateTime;
     function NomesBancos: TArray<string>;
+    function Ambiente: TStrings;
+    function Rodar(const AExe, AArgs: string; out AUltimaLinha: string): Integer;
+    function MarcadorLock(const ANome: string): string;
+    function CopiarArquivo(const AOrigem, ADestino: string; out AErro: string): Boolean;
   public
     constructor Create(AConfig: TConfig; ALog: TLog; AExecutor: TExecutor = nil);
+    function Executar: Boolean;
+    function ExecutarBanco(const ABanco: TBancoConfig): TResultadoBanco;
+    function EspacoLivre(const APasta: string): Int64; virtual;
     procedure AplicarRetencao;
     procedure GravarStatus(const AResultados: TArray<TResultadoBanco>);
     class function NomeArquivoBackup(const ADestino, ANome: string; AQuando: TDateTime;
@@ -34,22 +42,210 @@ type
       const ANomes: TArray<string>): Boolean;
     class function LerUltimaExecucao(const ADestino: string): TDateTime;
     property Agora: TDateTime read FAgora write FAgora;
+    property EspacoLivreFixo: Int64 read FEspacoLivreFixo write FEspacoLivreFixo;
   end;
 
 implementation
 
 uses
-  System.IOUtils, System.IniFiles, System.StrUtils, System.DateUtils, System.Character;
+  Winapi.Windows, System.IOUtils, System.IniFiles, System.StrUtils, System.DateUtils,
+  System.Character;
+
+// TFile.GetSize nao existe no Delphi 10.3
+function TamanhoArquivo(const AArquivo: string): Int64;
+var
+  SR: TSearchRec;
+begin
+  Result := 0;
+  if FindFirst(AArquivo, faAnyFile, SR) = 0 then
+  begin
+    Result := SR.Size;
+    System.SysUtils.FindClose(SR);
+  end;
+end;
 
 constructor TBackup.Create(AConfig: TConfig; ALog: TLog; AExecutor: TExecutor);
 begin
   inherited Create;
   FConfig := AConfig;
   FLog := ALog;
+  FEspacoLivreFixo := -1;
   if Assigned(AExecutor) then
     FExecutor := AExecutor
   else
     FExecutor := ExecutarProcesso;
+end;
+
+function TBackup.Ambiente: TStrings;
+begin
+  Result := TStringList.Create;
+  Result.Add('ISC_USER=' + FConfig.Usuario);
+  Result.Add('ISC_PASSWORD=' + FConfig.Senha);
+end;
+
+function TBackup.Rodar(const AExe, AArgs: string; out AUltimaLinha: string): Integer;
+var
+  Amb: TStrings;
+  Ultima: string;
+begin
+  FLog.Escrever('> ' + ExtractFileName(AExe) + ' ' + AArgs);
+  Ultima := '';
+  Amb := Ambiente;
+  try
+    Result := FExecutor(AExe, AArgs, Amb,
+      procedure(const L: string)
+      begin
+        if Trim(L) <> '' then
+        begin
+          Ultima := L;
+          FLog.Escrever('  ' + L);
+        end;
+      end);
+  finally
+    Amb.Free;
+  end;
+  AUltimaLinha := Ultima;
+  FLog.Escrever('  código de saída ' + IntToStr(Result));
+end;
+
+function TBackup.MarcadorLock(const ANome: string): string;
+begin
+  Result := TPath.Combine(FConfig.Destino, ANome + '.lock-pendente');
+end;
+
+function TBackup.EspacoLivre(const APasta: string): Int64;
+var
+  Livre, Total, TotalLivre: Int64;
+begin
+  if FEspacoLivreFixo >= 0 then
+    Exit(FEspacoLivreFixo);
+  if GetDiskFreeSpaceEx(PChar(IncludeTrailingPathDelimiter(APasta)), Livre, Total, @TotalLivre) then
+    Result := Livre
+  else
+    Result := 0;
+end;
+
+function TBackup.CopiarArquivo(const AOrigem, ADestino: string; out AErro: string): Boolean;
+begin
+  AErro := '';
+  Result := CopyFile(PChar(AOrigem), PChar(ADestino), False);
+  if not Result then
+    AErro := SysErrorMessage(GetLastError);
+end;
+
+function TBackup.ExecutarBanco(const ABanco: TBancoConfig): TResultadoBanco;
+var
+  Quando: TDateTime;
+  Fbk, Fdb, Ultima, Erro: string;
+  Codigo, CodigoN: Integer;
+  Necessario: Int64;
+  Erros: TStringList;
+
+  procedure Falha(const AMsg: string);
+  begin
+    Erros.Add(AMsg);
+    FLog.Escrever('ERRO ' + ABanco.Nome + ': ' + AMsg);
+  end;
+
+begin
+  Quando := Momento;
+  Result := Default(TResultadoBanco);
+  Result.Nome := ABanco.Nome;
+  Result.Inicio := Quando;
+  Erro := '';
+  Erros := TStringList.Create;
+  try
+    FLog.Escrever('=== Banco ' + ABanco.Nome + ' (' + ABanco.Arquivo + ')');
+    // 1. Recuperação de lock pendente
+    if TFile.Exists(MarcadorLock(ABanco.Nome)) then
+    begin
+      FLog.Escrever('Marcador de lock pendente encontrado; destravando antes de continuar');
+      Codigo := Rodar(FConfig.Nbackup, '-N ' + Aspas(ABanco.Arquivo), Ultima);
+      if Codigo <> 0 then
+        FLog.Escrever('Aviso: nbackup -N retornou ' + IntToStr(Codigo) + ' (' + Ultima + '); seguindo');
+      TFile.Delete(MarcadorLock(ABanco.Nome));
+    end;
+    // 2. Espaço livre
+    Necessario := 0;
+    if FConfig.CopiaFbk then
+      Inc(Necessario, TamanhoArquivo(ABanco.Arquivo));
+    if FConfig.CopiaFdb then
+      Inc(Necessario, TamanhoArquivo(ABanco.Arquivo));
+    if EspacoLivre(FConfig.Destino) < Necessario then
+    begin
+      Falha(Format('Espaço insuficiente em %s: necessário %d bytes', [FConfig.Destino, Necessario]));
+      Exit;
+    end;
+    // 3. gbak
+    if FConfig.CopiaFbk then
+    begin
+      Fbk := NomeArquivoBackup(FConfig.Destino, ABanco.Nome, Quando, '.fbk');
+      Codigo := Rodar(FConfig.Gbak, '-b -g -v -se localhost:service_mgr ' + Aspas(ABanco.Arquivo)
+        + ' ' + Aspas(Fbk), Ultima);
+      if Codigo <> 0 then
+        Falha('gbak retornou ' + IntToStr(Codigo) + ': ' + Ultima)
+      else if TFile.Exists(Fbk) then
+        Result.TamanhoFbk := TamanhoArquivo(Fbk);
+    end;
+    // 4. nbackup
+    if FConfig.CopiaFdb then
+    begin
+      Fdb := NomeArquivoBackup(FConfig.Destino, ABanco.Nome, Quando, '.fdb');
+      Codigo := Rodar(FConfig.Nbackup, '-L ' + Aspas(ABanco.Arquivo), Ultima);
+      if Codigo <> 0 then
+        Falha('nbackup -L retornou ' + IntToStr(Codigo) + ': ' + Ultima)
+      else
+      begin
+        TFile.WriteAllText(MarcadorLock(ABanco.Nome), FormatDateTime('yyyy-mm-dd hh:nn:ss', Quando));
+        try
+          FLog.Escrever('Copiando ' + ABanco.Arquivo + ' -> ' + Fdb);
+          if not CopiarArquivo(ABanco.Arquivo, Fdb, Erro) then
+            Falha('cópia do arquivo falhou: ' + Erro);
+        finally
+          CodigoN := Rodar(FConfig.Nbackup, '-N ' + Aspas(ABanco.Arquivo), Ultima);
+          if CodigoN <> 0 then
+            Falha('nbackup -N retornou ' + IntToStr(CodigoN) + ': ' + Ultima)
+          else
+            TFile.Delete(MarcadorLock(ABanco.Nome));
+        end;
+        if TFile.Exists(Fdb) and (Erro = '') and (CodigoN = 0) then
+        begin
+          Codigo := Rodar(FConfig.Nbackup, '-F ' + Aspas(Fdb), Ultima);
+          if Codigo <> 0 then
+            Falha('nbackup -F retornou ' + IntToStr(Codigo) + ': ' + Ultima)
+          else
+            Result.TamanhoFdb := TamanhoArquivo(Fdb);
+        end;
+      end;
+    end;
+  finally
+    Result.Fim := Momento;
+    Result.OK := Erros.Count = 0;
+    Result.Mensagem := Erros.Text.Trim;
+    if Result.OK then
+      FLog.Escrever('Banco ' + ABanco.Nome + ': OK')
+    else
+      FLog.Escrever('Banco ' + ABanco.Nome + ': ERRO');
+    Erros.Free;
+  end;
+end;
+
+function TBackup.Executar: Boolean;
+var
+  Resultados: TArray<TResultadoBanco>;
+  I: Integer;
+begin
+  Result := True;
+  FLog.Escrever('Início do backup');
+  SetLength(Resultados, FConfig.Bancos.Count);
+  for I := 0 to FConfig.Bancos.Count - 1 do
+  begin
+    Resultados[I] := ExecutarBanco(FConfig.Bancos[I]);
+    Result := Result and Resultados[I].OK;
+  end;
+  AplicarRetencao;
+  GravarStatus(Resultados);
+  FLog.Escrever('Fim do backup: ' + IfThen(Result, 'OK', 'ERRO'));
 end;
 
 function TBackup.Momento: TDateTime;
