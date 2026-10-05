@@ -12,7 +12,9 @@ uses
   pLog in '..\src\pLog.pas',
   pTesteLog in 'pTesteLog.pas',
   pProcesso in '..\src\pProcesso.pas',
-  pTesteProcesso in 'pTesteProcesso.pas';
+  pTesteProcesso in 'pTesteProcesso.pas',
+  pBackup in '..\src\pBackup.pas',
+  pTesteBackup in 'pTesteBackup.pas';
 
 var
   Runner: ITestRunner;
