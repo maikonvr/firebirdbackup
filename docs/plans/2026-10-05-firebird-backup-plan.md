@@ -10,7 +10,22 @@
 
 **Spec:** `docs/plans/2026-10-05-firebird-backup-spec.md`
 
-Status: em execução a partir de 2026-10-05. Registrar ao final: desvios, validações rodadas, pendências.
+## Status (2026-10-05): concluído
+
+**Validações rodadas**
+- `testar.cmd`: 41 testes DUnitX passando (pConfig 10, pLog 3, pProcesso 6, pBackup 15, pAgenda 6, sanidade 1).
+- `build.cmd` e `msbuild FirebirdBackup.dproj`: build limpo, sem warnings.
+- Integração com Firebird 3.0 local (mesmos comandos do 2.5): `--run` gerou `.fbk` e `.fdb`, exit 0; a cópia `.fdb` abriu no `isql`; o `.fbk` restaurou com `gbak -c`; com banco travado e marcador `.lock-pendente`, o `-N` rodou antes do `-L` e o banco ficou destravado; `--run` sem `backup.ini` retorna 2 com o erro no log.
+- Tela: abre com padrões; Salvar regrava o INI idêntico; Executar agora rola o `gbak -v` e atualiza o painel; fechar vai para a bandeja; segunda instância não abre; `schtasks` com os argumentos gerados cria a tarefa como SISTEMA (criada e apagada no teste); timer disparou uma vez no horário.
+
+**Desvios do plan**
+- Timer: dispara quando o horário já passou e a última execução não é de hoje (spec atualizada).
+- `nbackup -F` só roda se o `-N` normal retornou 0; se o `-N` falha, o marcador fica para nova tentativa.
+- `TFile.GetSize` não existe no 10.3: helper `TamanhoArquivo` em `pBackup`.
+- Ícone gerado por script (32×32) porque `brcc32` rejeita o `.ico` padrão do Delphi (camadas PNG 256px).
+- Ajustes só em código de teste: `AddStrings` com open array, `echo erro>&2`, `ExecutorFalso()`, data real no teste de retenção.
+
+**Pendências**: nenhuma na v1. Restore fica fora (decisão do usuário); senha cifrada e teste de restore automático são evoluções futuras.
 
 ## Global Constraints
 
