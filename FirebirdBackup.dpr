@@ -1,11 +1,86 @@
 ﻿program FirebirdBackup;
 
 uses
+  Winapi.Windows,
+  System.SysUtils,
   Vcl.Forms,
-  System.SysUtils;
+  pConfig in 'src\pConfig.pas',
+  pLog in 'src\pLog.pas',
+  pProcesso in 'src\pProcesso.pas',
+  pBackup in 'src\pBackup.pas',
+  pAgenda in 'src\pAgenda.pas',
+  pPrincipal in 'src\pPrincipal.pas' {FormPrincipal};
+
+function ModoRun: Integer;
+var
+  Config: TConfig;
+  Log: TLog;
+  Backup: TBackup;
+  Erro: string;
+begin
+  Config := TConfig.Create;
+  try
+    Config.Carregar(TConfig.ArquivoPadrao);
+    if not Config.Validar(Erro) then
+    begin
+      // Sem destino válido não há onde logar: grava ao lado da exe
+      Log := TLog.Create(ExtractFilePath(ParamStr(0)));
+      try
+        Log.Escrever('Configuração inválida: ' + Erro);
+      finally
+        Log.Free;
+      end;
+      Exit(2);
+    end;
+    Log := TLog.Create(Config.Destino);
+    try
+      Backup := TBackup.Create(Config, Log);
+      try
+        if Backup.Executar then
+          Result := 0
+        else
+          Result := 1;
+      finally
+        Backup.Free;
+      end;
+    finally
+      Log.Free;
+    end;
+  finally
+    Config.Free;
+  end;
+end;
+
+const
+  NomeMutex = 'FirebirdBackup_Instancia_Unica';
+
+var
+  Mutex: THandle;
+  Janela: HWND;
 
 begin
+  // aceita --run, -run e /run
+  if FindCmdLineSwitch('-run', ['-', '/'], True) or FindCmdLineSwitch('run', ['-', '/'], True) then
+  begin
+    ExitCode := ModoRun;
+    Exit;
+  end;
+  Mutex := CreateMutex(nil, True, NomeMutex);
+  if (Mutex = 0) or (GetLastError = ERROR_ALREADY_EXISTS) then
+  begin
+    Janela := FindWindow('TFormPrincipal', nil);
+    if Janela <> 0 then
+    begin
+      ShowWindow(Janela, SW_RESTORE);
+      SetForegroundWindow(Janela);
+    end;
+    Exit;
+  end;
   Application.Initialize;
   Application.MainFormOnTaskbar := True;
+  Application.Title := 'Backup Firebird';
+  Application.CreateForm(TFormPrincipal, FormPrincipal);
   Application.Run;
+  ReleaseMutex(Mutex);
+  CloseHandle(Mutex);
 end.
