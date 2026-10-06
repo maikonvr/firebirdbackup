@@ -4,8 +4,8 @@ interface
 
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes, System.IniFiles,
-  System.UITypes, Vcl.Forms, Vcl.Controls, Vcl.StdCtrls, Vcl.ComCtrls, Vcl.ExtCtrls, Vcl.Menus, Vcl.Mask,
-  Vcl.Dialogs, Vcl.FileCtrl,
+  System.UITypes, System.SyncObjs, Vcl.Forms, Vcl.Controls, Vcl.StdCtrls, Vcl.ComCtrls, Vcl.ExtCtrls,
+  Vcl.Menus, Vcl.Mask, Vcl.Dialogs, Vcl.FileCtrl,
   pConfig, pLog, pBackup;
 
 type
@@ -40,6 +40,7 @@ type
     pbAndamento: TProgressBar;
     gbUltimo: TGroupBox;
     lvUltimo: TListView;
+    lblEtapa: TLabel;
     memoLog: TMemo;
     TrayIcon: TTrayIcon;
     pmTray: TPopupMenu;
@@ -48,6 +49,7 @@ type
     miSep: TMenuItem;
     miSair: TMenuItem;
     Timer: TTimer;
+    TimerTela: TTimer;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
@@ -62,10 +64,20 @@ type
     procedure miAbrirClick(Sender: TObject);
     procedure miSairClick(Sender: TObject);
     procedure TimerTimer(Sender: TObject);
+    procedure TimerTelaTimer(Sender: TObject);
   private
     FConfig: TConfig;
     FExecutando: Boolean;
     FSair: Boolean;
+    // A thread do backup só enfileira; TimerTela leva tudo ao memo em lote.
+    // Uma mensagem por linha (TThread.Queue + Lines.Add) afogava a thread principal
+    // com dezenas de milhares de linhas do gbak -v e a janela ficava "Não respondendo".
+    FFila: TStringList;          // linhas pendentes (protegidas por FFilaLock)
+    FFilaLock: TCriticalSection;
+    FTela: TStringList;          // espelho do que está no memo, para a poda
+    FEtapa: string;              // última linha de evento (sem recuo) do log
+    FCopiados, FTotalCopia: Int64; // progresso da cópia do .fdb; FTotalCopia = 0 fora da cópia
+    FInicioBackup: TDateTime;
     procedure ConfigParaTela;
     function TelaParaConfig(out AErro: string): Boolean;
     procedure PreencherBancos;
@@ -76,7 +88,10 @@ type
     procedure IniciarBackup(const AOrigem: string; AConfig: TConfig);
     procedure AoTerminar(AOk: Boolean);
     procedure Habilitar(AAtivo: Boolean);
-    procedure LimitarMemo;
+    // ADoLog: linha no formato do TLog ("hh:nn:ss  texto"); texto sem recuo vira a etapa atual
+    procedure Enfileirar(const ALinha: string; ADoLog: Boolean);
+    procedure DrenarFila;
+    procedure AtualizarEtapa(const AEtapa: string; ACopiados, ATotal: Int64);
   protected
     procedure WndProc(var Message: TMessage); override;
   end;
@@ -97,7 +112,7 @@ uses
 
 const
   MaxLinhasMemo = 5000;
-  LinhasRemovidas = 1000;
+  LinhasMantidas = 4000;   // ao passar de MaxLinhasMemo o memo é remontado com as últimas
 
 var
   MsgAbrir: UINT = 0;
@@ -120,16 +135,29 @@ end;
 procedure TFormPrincipal.FormCreate(Sender: TObject);
 begin
   FConfig := TConfig.Create;
+  FFila := TStringList.Create;
+  FFilaLock := TCriticalSection.Create;
+  FTela := TStringList.Create;
   if TFile.Exists(TConfig.ArquivoPadrao) then
     FConfig.Carregar(TConfig.ArquivoPadrao);
   ConfigParaTela;
   CarregarUltimoStatus;
+  lblEtapa.Caption := 'Nenhum backup em andamento.';
   TrayIcon.Hint := Application.Title;
   TrayIcon.Icon := Application.Icon;
 end;
 
 procedure TFormPrincipal.FormDestroy(Sender: TObject);
 begin
+  TimerTela.Enabled := False;
+  FTela.Free;
+  // Saindo com backup em andamento (o usuário confirmou), a thread ainda enfileira:
+  // vazar a fila e o lock é melhor do que uma violação de acesso na saída.
+  if not FExecutando then
+  begin
+    FFilaLock.Free;
+    FFila.Free;
+  end;
   FConfig.Free;
 end;
 
@@ -194,9 +222,14 @@ begin
   end;
 end;
 
+function MBytes(AValor: Int64): string;
+begin
+  Result := FormatFloat('0.0', AValor / 1048576);
+end;
+
 function MB(const S: string): string;
 begin
-  Result := FormatFloat('0.0', StrToInt64Def(S, 0) / 1048576);
+  Result := MBytes(StrToInt64Def(S, 0));
 end;
 
 procedure TFormPrincipal.CarregarUltimoStatus;
@@ -358,19 +391,104 @@ begin
   pbAndamento.Visible := not AAtivo;
 end;
 
-procedure TFormPrincipal.LimitarMemo;
+procedure TFormPrincipal.Enfileirar(const ALinha: string; ADoLog: Boolean);
 var
+  Texto: string;
+begin
+  FFilaLock.Enter;
+  try
+    FFila.Add(ALinha);
+    if ADoLog then
+    begin
+      // "hh:nn:ss  texto": a saída do gbak/nbackup chega recuada; linha sem recuo é evento
+      Texto := Copy(ALinha, 11, MaxInt);
+      if (Texto <> '') and (Texto[1] <> ' ') then
+      begin
+        FEtapa := Texto;
+        FTotalCopia := 0;   // nova etapa: a barra volta ao marquee
+      end;
+    end;
+  finally
+    FFilaLock.Leave;
+  end;
+end;
+
+// Thread principal: leva as linhas pendentes ao memo em UMA inserção e atualiza a etapa.
+procedure TFormPrincipal.DrenarFila;
+var
+  Lote, Tmp: TStringList;
+  Etapa: string;
+  Copiados, Total: Int64;
   I: Integer;
 begin
-  if memoLog.Lines.Count <= MaxLinhasMemo then
-    Exit;
-  memoLog.Lines.BeginUpdate;
+  Lote := TStringList.Create;
   try
-    for I := 1 to LinhasRemovidas do
-      memoLog.Lines.Delete(0);
+    FFilaLock.Enter;
+    try
+      Tmp := FFila;
+      FFila := Lote;
+      Lote := Tmp;
+      Etapa := FEtapa;
+      Copiados := FCopiados;
+      Total := FTotalCopia;
+    finally
+      FFilaLock.Leave;
+    end;
+    if Lote.Count > 0 then
+    begin
+      FTela.AddStrings(Lote);
+      if FTela.Count > MaxLinhasMemo then
+      begin
+        // Poda: remonta o memo uma vez (um Lines.Delete(0) por linha relayouta o texto inteiro)
+        for I := 1 to FTela.Count - LinhasMantidas do
+          FTela.Delete(0);
+        memoLog.Text := FTela.Text;
+      end
+      else
+      begin
+        memoLog.SelStart := memoLog.GetTextLen;
+        memoLog.SelLength := 0;
+        memoLog.SelText := Lote.Text;
+      end;
+      memoLog.SelStart := memoLog.GetTextLen;
+      memoLog.Perform(EM_SCROLLCARET, 0, 0);
+    end;
   finally
-    memoLog.Lines.EndUpdate;
+    Lote.Free;
   end;
+  AtualizarEtapa(Etapa, Copiados, Total);
+end;
+
+procedure TFormPrincipal.AtualizarEtapa(const AEtapa: string; ACopiados, ATotal: Int64);
+var
+  Texto: string;
+begin
+  if not FExecutando then
+    Exit;
+  Texto := '[' + FormatDateTime('hh:nn:ss', Now - FInicioBackup) + '] ';
+  if ATotal > 0 then
+  begin
+    if pbAndamento.Style <> pbstNormal then
+    begin
+      pbAndamento.Style := pbstNormal;
+      pbAndamento.Max := 1000;
+    end;
+    pbAndamento.Position := Round(ACopiados / ATotal * 1000);
+    // Números antes da etapa: a linha "Copiando <origem> -> <destino>" é longa e o label
+    // corta o fim com reticências.
+    Texto := Format('%s%d%% (%s de %s MB)  ', [Texto, ACopiados * 100 div ATotal,
+      MBytes(ACopiados), MBytes(ATotal)]);
+  end
+  else if pbAndamento.Style <> pbstMarquee then
+    pbAndamento.Style := pbstMarquee;
+  Texto := Texto + AEtapa;
+  if lblEtapa.Caption <> Texto then
+    lblEtapa.Caption := Texto;
+end;
+
+procedure TFormPrincipal.TimerTelaTimer(Sender: TObject);
+begin
+  DrenarFila;
 end;
 
 function TFormPrincipal.CopiarConfig(AOrigem: TConfig): TConfig;
@@ -393,19 +511,28 @@ begin
   Config := AConfig;
   if FExecutando then
   begin
-    memoLog.Lines.Add('Pedido (' + AOrigem + ') ignorado: backup já em andamento nesta janela');
+    Enfileirar('Pedido (' + AOrigem + ') ignorado: backup já em andamento nesta janela', False);
     Config.Free;
     Exit;
   end;
   if TBackup.OutroEmAndamento then
   begin
-    memoLog.Lines.Add('Pedido (' + AOrigem + ') ignorado: backup já em andamento em outro processo (tarefa agendada?)');
+    Enfileirar('Pedido (' + AOrigem + ') ignorado: backup já em andamento em outro processo (tarefa agendada?)', False);
     Config.Free;
     Exit;
   end;
   FExecutando := True;
+  FInicioBackup := Now;
+  FFilaLock.Enter;
+  try
+    FEtapa := 'Iniciando...';
+    FCopiados := 0;
+    FTotalCopia := 0;
+  finally
+    FFilaLock.Leave;
+  end;
   Habilitar(False);
-  memoLog.Lines.Add('--- Backup iniciado (' + AOrigem + ')');
+  Enfileirar('--- Backup iniciado (' + AOrigem + ')', False);
   TThread.CreateAnonymousThread(
     procedure
     var
@@ -420,14 +547,20 @@ begin
           try
             Log.OnLinha := procedure(const L: string)
               begin
-                TThread.Queue(nil, procedure
-                  begin
-                    memoLog.Lines.Add(L);
-                    LimitarMemo;
-                  end);
+                Enfileirar(L, True);
               end;
             Backup := TBackup.Create(Config, Log);
             try
+              Backup.OnProgresso := procedure(ACopiados, ATotal: Int64)
+                begin
+                  FFilaLock.Enter;
+                  try
+                    FCopiados := ACopiados;
+                    FTotalCopia := ATotal;
+                  finally
+                    FFilaLock.Leave;
+                  end;
+                end;
               Ok := Backup.Executar;
             finally
               Backup.Free;
@@ -439,10 +572,7 @@ begin
           on E: Exception do
           begin
             Ok := False;
-            TThread.Queue(nil, procedure
-              begin
-                memoLog.Lines.Add('ERRO fatal: ' + E.ClassName + ': ' + E.Message);
-              end);
+            Enfileirar('ERRO fatal: ' + E.ClassName + ': ' + E.Message, False);
           end;
         end;
       finally
@@ -454,9 +584,10 @@ end;
 
 procedure TFormPrincipal.AoTerminar(AOk: Boolean);
 begin
+  DrenarFila;   // ainda com FExecutando = True, para a etapa final e o tempo total aparecerem
   FExecutando := False;
   Habilitar(True);
-  LimitarMemo;
+  pbAndamento.Style := pbstMarquee;
   CarregarUltimoStatus;
   if not AOk then
   begin
@@ -474,12 +605,12 @@ var
 begin
   if FExecutando then
   begin
-    memoLog.Lines.Add('Pedido (manual) ignorado: backup já em andamento nesta janela');
+    Enfileirar('Pedido (manual) ignorado: backup já em andamento nesta janela', False);
     Exit;
   end;
   if not TelaParaConfig(Erro) then
   begin
-    memoLog.Lines.Add('Configuração inválida: ' + Erro);
+    Enfileirar('Configuração inválida: ' + Erro, False);
     MessageDlg(Erro, mtError, [mbOK], 0);
     Exit;
   end;
@@ -505,7 +636,7 @@ begin
       Exit;
     if not Salva.Validar(Erro) then
     begin
-      memoLog.Lines.Add('Timer: configuração salva inválida: ' + Erro);
+      Enfileirar('Timer: configuração salva inválida: ' + Erro, False);
       Exit;
     end;
   except

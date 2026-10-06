@@ -16,6 +16,9 @@ type
     TamanhoFdb: Int64;
   end;
 
+  // Progresso da cópia do .fdb: bytes copiados e tamanho total (chamado na thread do backup)
+  TProgressoEvento = reference to procedure(ACopiados, ATotal: Int64);
+
   TBackup = class
   private
     FConfig: TConfig;
@@ -24,6 +27,7 @@ type
     FAgora: TDateTime;
     FEspacoLivreFixo: Int64;
     FTimeoutMs: Cardinal;
+    FOnProgresso: TProgressoEvento;
     function Momento: TDateTime;
     function NomesBancos: TArray<string>;
     function Ambiente: TStrings;
@@ -52,6 +56,7 @@ type
     property EspacoLivreFixo: Int64 read FEspacoLivreFixo write FEspacoLivreFixo;
     // Tempo máximo de cada gbak/nbackup; 0 = sem limite. Padrão 6 h.
     property TimeoutMs: Cardinal read FTimeoutMs write FTimeoutMs;
+    property OnProgresso: TProgressoEvento read FOnProgresso write FOnProgresso;
   end;
 
 implementation
@@ -158,10 +163,24 @@ begin
     Result := 0;
 end;
 
+// Callback do CopyFileEx: repassa o andamento ao OnProgresso do TBackup apontado por lpData.
+function RotinaProgresso(TotalFileSize, TotalBytesTransferred, StreamSize,
+  StreamBytesTransferred: LARGE_INTEGER; dwStreamNumber, dwCallbackReason: DWORD;
+  hSourceFile, hDestinationFile: THandle; lpData: Pointer): DWORD; stdcall;
+var
+  Backup: TBackup;
+begin
+  Backup := TBackup(lpData);
+  if Assigned(Backup.FOnProgresso) then
+    Backup.FOnProgresso(TotalBytesTransferred.QuadPart, TotalFileSize.QuadPart);
+  Result := PROGRESS_CONTINUE;
+end;
+
 function TBackup.CopiarArquivo(const AOrigem, ADestino: string; out AErro: string): Boolean;
 begin
   AErro := '';
-  Result := CopyFile(PChar(AOrigem), PChar(ADestino), False);
+  // Sem COPY_FILE_FAIL_IF_EXISTS: mesmo comportamento do CopyFile(..., False) que havia antes
+  Result := CopyFileEx(PChar(AOrigem), PChar(ADestino), @RotinaProgresso, Self, nil, 0);
   if not Result then
     AErro := SysErrorMessage(GetLastError);
 end;

@@ -305,11 +305,20 @@
       ViewStyle = vsReport
     end
   end
+  object lblEtapa: TLabel
+    Left = 8
+    Top = 437
+    Width = 764
+    Height = 15
+    AutoSize = False
+    Caption = 'Nenhum backup em andamento.'
+    EllipsisPosition = epEndEllipsis
+  end
   object memoLog: TMemo
     Left = 8
-    Top = 440
+    Top = 456
     Width = 764
-    Height = 152
+    Height = 136
     Font.Charset = ANSI_CHARSET
     Font.Color = clWindowText
     Font.Height = -11
@@ -317,8 +326,9 @@
     Font.Style = []
     ParentFont = False
     ReadOnly = True
-    ScrollBars = ssVertical
+    ScrollBars = ssBoth
     TabOrder = 5
+    WordWrap = False
   end
   object TrayIcon: TTrayIcon
     PopupMenu = pmTray
@@ -351,6 +361,12 @@
     Interval = 60000
     OnTimer = TimerTimer
     Left = 680
+    Top = 296
+  end
+  object TimerTela: TTimer
+    Interval = 200
+    OnTimer = TimerTelaTimer
+    Left = 648
     Top = 296
   end
 end

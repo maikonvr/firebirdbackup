@@ -6,3 +6,5 @@ dcu/
 __history/
 backup.ini
 *.res
+.codegraph/
+.mcp.json

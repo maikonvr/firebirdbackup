@@ -49,6 +49,7 @@ type
     [Test] procedure TestExecutarComDestinoInvalidoNaoLevanta;
     [Test] procedure TestMarcadorExisteDuranteLock;
     [Test] procedure TestRetencaoUsaDataDoNomeNaoDoArquivo;
+    [Test] procedure TestCopiaInformaProgresso;
   end;
 
 implementation
@@ -470,6 +471,7 @@ begin
   Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
   try
     Bk.Agora := EncodeDate(2026, 10, 5);
+    FLog.Agora := Bk.Agora;   // o log usa a data real; o teste lê o arquivo de 2026-10-05
     Bk.EspacoLivreFixo := High(Int64);
     Bk.Executar;
   finally
@@ -545,6 +547,7 @@ begin
     Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
     try
       Bk.Agora := EncodeDate(2026, 10, 5);
+      FLog.Agora := Bk.Agora;
       Bk.EspacoLivreFixo := High(Int64);
       Assert.IsFalse(Bk.Executar);
     finally
@@ -642,6 +645,42 @@ begin
   finally
     Bk.Free;
   end;
+end;
+
+procedure TTesteBackup.TestCopiaInformaProgresso;
+var
+  Bk: TBackup;
+  Chamadas: Integer;
+  UltCopiados, UltTotal, Tamanho: Int64;
+  Conteudo: TBytes;
+begin
+  AddBanco('AG');
+  FConfig.CopiaFbk := False;
+  // Arquivo grande o bastante para o CopyFileEx chamar o progresso mais de uma vez
+  SetLength(Conteudo, 3 * 1024 * 1024);
+  TFile.WriteAllBytes(FConfig.Bancos[0].Arquivo, Conteudo);
+  Tamanho := Length(Conteudo);
+  Chamadas := 0;
+  UltCopiados := -1;
+  UltTotal := -1;
+  Bk := TBackup.Create(FConfig, FLog, ExecutorFalso());
+  try
+    Bk.EspacoLivreFixo := High(Int64);
+    Bk.OnProgresso := procedure(ACopiados, ATotal: Int64)
+      begin
+        Inc(Chamadas);
+        UltCopiados := ACopiados;
+        UltTotal := ATotal;
+      end;
+    Assert.IsTrue(Bk.ExecutarBanco(FConfig.Bancos[0]).OK);
+  finally
+    Bk.Free;
+  end;
+  Assert.IsTrue(Chamadas >= 2, 'progresso chamado ' + IntToStr(Chamadas) + ' vez(es)');
+  Assert.AreEqual(Tamanho, UltTotal, 'total da última chamada');
+  Assert.AreEqual(Tamanho, UltCopiados, 'copiados na última chamada');
+  Assert.AreEqual(Tamanho, Int64(Length(TFile.ReadAllBytes(TDirectory.GetFiles(FDestino, 'AG_*.fdb')[0]))),
+    'cópia íntegra');
 end;
 
 initialization
