@@ -19,6 +19,7 @@ O `.fbk` é escrito pelo **processo do servidor Firebird** (via Services API), n
 3. Escolha como rodar:
    - **Agendar no Windows** (recomendado): cria a tarefa diária `FirebirdBackup`, que roda `FirebirdBackup.exe --run` mesmo sem usuário logado. Precisa de sessão administrativa.
    - Deixar a exe aberta na bandeja: o timer dispara no horário (ou na primeira oportunidade do dia, se o app estava fechado).
+   - Com os dois ativos no mesmo horário, a tarefa (SYSTEM) roda e o timer da tela se limita a registrar "backup já em andamento em outro processo" até ela terminar. Nunca rodam em paralelo: o `.fbk` dos dois teria o mesmo nome e o segundo gbak falharia com "cannot open backup file".
 4. **Executar agora** roda na hora e mostra o andamento na tela.
 
 `FirebirdBackup.exe --run` sai com 0 (OK), 1 (algum banco falhou) ou 2 (configuração inválida; erro gravado em `backup_*.log` ao lado da exe).

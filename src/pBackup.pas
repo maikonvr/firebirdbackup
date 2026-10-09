@@ -52,6 +52,12 @@ type
     // Mutex global que impede a tarefa agendada e a tela de rodarem ao mesmo tempo
     class function NomeMutexExecucao: string;
     class function OutroEmAndamento: Boolean;
+    // Decide, pelo resultado do CreateMutex, se outro processo já está com o mutex.
+    // Handle 0 com ERROR_ACCESS_DENIED também conta: o mutex existe, mas pertence a outra
+    // conta (a tarefa agendada roda como SYSTEM; a tela, como o usuário logado).
+    class function MutexIndicaOutro(AHandle: THandle; AErro: Cardinal): Boolean;
+    // Tenta ficar com o mutex; False = outro processo já o tem (AHandle sai 0)
+    class function AdquirirMutex(out AHandle: THandle): Boolean;
     property Agora: TDateTime read FAgora write FAgora;
     property EspacoLivreFixo: Int64 read FEspacoLivreFixo write FEspacoLivreFixo;
     // Tempo máximo de cada gbak/nbackup; 0 = sem limite. Padrão 6 h.
@@ -100,16 +106,34 @@ begin
   Result := 'Global\FirebirdBackup_Execucao';
 end;
 
+class function TBackup.MutexIndicaOutro(AHandle: THandle; AErro: Cardinal): Boolean;
+begin
+  Result := ((AHandle <> 0) and (AErro = ERROR_ALREADY_EXISTS))
+    or ((AHandle = 0) and (AErro = ERROR_ACCESS_DENIED));
+end;
+
+class function TBackup.AdquirirMutex(out AHandle: THandle): Boolean;
+var
+  Erro: Cardinal;
+begin
+  AHandle := CreateMutex(nil, True, PChar(NomeMutexExecucao));
+  Erro := GetLastError;
+  Result := not MutexIndicaOutro(AHandle, Erro);
+  if not Result and (AHandle <> 0) then
+  begin
+    CloseHandle(AHandle);   // já existia: este processo não é o dono, não há o que liberar
+    AHandle := 0;
+  end;
+end;
+
 class function TBackup.OutroEmAndamento: Boolean;
 var
   M: THandle;
 begin
-  M := CreateMutex(nil, True, PChar(NomeMutexExecucao));
-  Result := (M <> 0) and (GetLastError = ERROR_ALREADY_EXISTS);
+  Result := not AdquirirMutex(M);
   if M <> 0 then
   begin
-    if not Result then
-      ReleaseMutex(M);
+    ReleaseMutex(M);
     CloseHandle(M);
   end;
 end;
@@ -303,10 +327,8 @@ var
   Inicio: TDateTime;
   Mutex: THandle;
 begin
-  Mutex := CreateMutex(nil, True, PChar(NomeMutexExecucao));
-  if (Mutex <> 0) and (GetLastError = ERROR_ALREADY_EXISTS) then
+  if not AdquirirMutex(Mutex) then
   begin
-    CloseHandle(Mutex);
     FLog.Escrever('Backup já em andamento em outro processo; esta execução foi ignorada');
     Exit(False);
   end;

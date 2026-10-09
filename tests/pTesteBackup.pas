@@ -50,6 +50,7 @@ type
     [Test] procedure TestMarcadorExisteDuranteLock;
     [Test] procedure TestRetencaoUsaDataDoNomeNaoDoArquivo;
     [Test] procedure TestCopiaInformaProgresso;
+    [Test] procedure TestMutexDeOutraContaIndicaOutroEmAndamento;
   end;
 
 implementation
@@ -681,6 +682,16 @@ begin
   Assert.AreEqual(Tamanho, UltCopiados, 'copiados na última chamada');
   Assert.AreEqual(Tamanho, Int64(Length(TFile.ReadAllBytes(TDirectory.GetFiles(FDestino, 'AG_*.fdb')[0]))),
     'cópia íntegra');
+end;
+
+// A tarefa agendada roda como SYSTEM e a tela como o usuário logado: o CreateMutex da
+// tela devolve handle 0 com ERROR_ACCESS_DENIED, e isso é "outro em andamento", não "livre".
+procedure TTesteBackup.TestMutexDeOutraContaIndicaOutroEmAndamento;
+begin
+  Assert.IsTrue(TBackup.MutexIndicaOutro(1, ERROR_ALREADY_EXISTS), 'mesma conta: já existe');
+  Assert.IsTrue(TBackup.MutexIndicaOutro(0, ERROR_ACCESS_DENIED), 'outra conta: existe, sem acesso');
+  Assert.IsFalse(TBackup.MutexIndicaOutro(1, ERROR_SUCCESS), 'criado agora: livre');
+  Assert.IsFalse(TBackup.MutexIndicaOutro(0, ERROR_INVALID_NAME), 'outra falha: segue como antes');
 end;
 
 initialization
